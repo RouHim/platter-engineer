@@ -1,0 +1,55 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+    
+      - name: Install latest git
+        run: pacman -Syy --noconfirm git
+
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      - name: Create non_root user
+        run: |
+          useradd nonroot && mkdir /home/nonroot && chown -R nonroot:nonroot /home/nonroot
+
+      - name: Set nonroot user in sudoers
+        run: |
+          echo 'nonroot ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
+      - name: Set root user in sudoers
+        run: |
+          echo 'root ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
+      - name: Enable multilib
+        run: |
+          echo -e '[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+
+      - name: Enable extra
+        run: |
+          sed -i '/^#\[extra\]/{N;s/#//g}' /etc/pacman.conf
+
+      - name: Install dependencies
+        run: |
+          pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso
+          
+      - name: Set source permissions
+        run: |
+          chown -R nonroot:nonroot .
+
+      - name: Build packages
+        run: |
+          sudo mkarchiso -v .
