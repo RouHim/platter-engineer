@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034
 
-iso_name="archlinux"
+iso_name="arch-live-disk-mgr"
 iso_label="ARCH_$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y%m)"
-iso_publisher="Arch Linux <https://archlinux.org>"
+iso_publisher="Rouven H."
 iso_application="Arch Linux Live/Rescue CD"
 iso_version="$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)"
 install_dir="arch"
@@ -27,8 +27,7 @@ file_permissions=(
   ["/etc/systemd/system/lightdm.service"]="0:0:644"
   ["/root/.xinitrc"]="0:0:755"
   ["/root/.zprofile"]="0:0:755"
-  ["/root/.config"]="0:0:755"
-  ["/root/Desktop/firefox.desktop"]="0:0:755"
+  ["/root/Desktop/epiphany.desktop"]="0:0:755"
   ["/root/Desktop/gnome-disk-utility.desktop"]="0:0:755"
   ["/root/Desktop/gparted.desktop"]="0:0:755"
 )
