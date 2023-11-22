@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -28,16 +28,48 @@ jobs:
         run: sudo mkarchiso -v .
 
       - name: Rename file
+        if: github.ref == 'refs/heads/main'
         run: mv out/*.iso out/arch-live-disk-mgr.iso
 
-      - name: Upload to s3
-        uses: yakubique/minio-upload@v1.1.3
+      # Create a new release based on semantic versioning
+      - name: Set up Node.js
+        if: github.ref == 'refs/heads/main'
+        uses: actions/setup-node@v4
         with:
-          endpoint: ${{ secrets.AWS_ENDPOINT }}
-          access_key: ${{ secrets.AWS_KEY_ID }}
-          secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          bucket: ${{ secrets.AWS_BUCKET }}
-          source: ./out/arch-live-disk-mgr.iso
-          target: '/'
-          # Disables TLS/SSL certificate verification. Allows TLS connectivity to servers with invalid certificates.
-          insecure: true
+          node-version: 18.x
+
+      - name: Install Dependencies
+        if: github.ref == 'refs/heads/main'
+        run: |
+          npm install -g \
+             semantic-release  \
+            @semantic-release/git  \
+            @semantic-release/gitlab  \
+            @semantic-release/changelog  \
+            @semantic-release/exec \
+            @semantic-release/commit-analyzer \
+            conventional-changelog-conventionalcommits
+
+      - name: Generate Semantic Release Notes and Create Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: npx semantic-release
+
+      - name: Upload iso
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bash .github/scripts/upload-asset-to-release.sh \
+            ${{ secrets.RELEASE_TOKEN }} \
+            "out/arch-live-disk-mgr.iso" \
+            "arch-live-disk-mgr.iso"
+
+      - name: Delete old releases
+        if: github.ref == 'refs/heads/main'
+        uses: dev-drprasad/delete-older-releases@v0.3.2
+        with:
+          keep_latest: 1
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
