@@ -38,4 +38,3 @@ jobs:
             ${{ secrets.RELEASE_TOKEN }} \
             "out/arch-live-disk-mgr.iso" \
             "arch-live-disk-mgr.iso"
-
