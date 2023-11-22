@@ -29,11 +29,20 @@ jobs:
 
       - name: Rename file
         run: mv out/*.iso out/arch-live-disk-mgr.iso
-        
-      - uses: shallwefootball/s3-upload-action@master
+
+      - uses: hkusu/s3-upload-action@v2
+        id: s3-upload
         with:
-          aws_key_id: ${{ secrets.AWS_KEY_ID }}
-          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY}}
-          aws_bucket: ${{ secrets.AWS_BUCKET }}
-          source_dir: out
-          endpoint: ${{ secrets.AWS_ENDPOINT }}
+          aws-access-key-id: ${{ secrets.AWS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: 'eu'
+          aws-bucket: ${{ secrets.AWS_BUCKET }}
+          file-path: './out/arch-live-disk-mgr.iso'
+          destination-dir: '/'
+          bucket-root: '/'
+          output-file-url: 'true'
+          content-type: 'application/x-iso9660-image'
+          public: 'true'
+
+      - name: Show URL
+        run: echo '${{ steps.s3-upload.outputs.file-url }}' 
