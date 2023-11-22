@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install dependencies
-        run: pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso
+        run: pacman -Syyu --noconfirm && pacman -S --noconfirm git base-devel archiso
 
       - name: Build iso file
         run: sudo mkarchiso -v .
