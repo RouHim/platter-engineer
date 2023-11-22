@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install dependencies
-        run: pacman -Syyu --noconfirm && pacman -S --noconfirm git base-devel archiso
+        run: pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso
 
       - name: Build iso file
         run: sudo mkarchiso -v .
@@ -31,31 +31,6 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: mv out/*.iso out/arch-live-disk-mgr.iso
 
-      # Create a new release based on semantic versioning
-      - name: Set up Node.js
-        if: github.ref == 'refs/heads/main'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18.x
-
-      - name: Install Dependencies
-        if: github.ref == 'refs/heads/main'
-        run: |
-          npm install -g \
-             semantic-release  \
-            @semantic-release/git  \
-            @semantic-release/gitlab  \
-            @semantic-release/changelog  \
-            @semantic-release/exec \
-            @semantic-release/commit-analyzer \
-            conventional-changelog-conventionalcommits
-
-      - name: Generate Semantic Release Notes and Create Release
-        if: github.ref == 'refs/heads/main'
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: npx semantic-release
-
       - name: Upload iso
         if: github.ref == 'refs/heads/main'
         run: |
@@ -63,13 +38,4 @@ jobs:
             ${{ secrets.RELEASE_TOKEN }} \
             "out/arch-live-disk-mgr.iso" \
             "arch-live-disk-mgr.iso"
-
-      - name: Delete old releases
-        if: github.ref == 'refs/heads/main'
-        uses: dev-drprasad/delete-older-releases@v0.3.2
-        with:
-          keep_latest: 1
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
