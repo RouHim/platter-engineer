@@ -14,20 +14,26 @@ jobs:
     container:
       image: archlinux:latest
       options: --privileged
-      
+
     steps:
-    
-      - name: Install latest git
-        run: pacman -Syy --noconfirm git
 
       - uses: actions/checkout@v3
         with:
           fetch-depth: 1
 
       - name: Install dependencies
-        run: |
-          pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso
+        run: pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso
 
-      - name: Build packages
-        run: |
-          sudo mkarchiso -v .
+      - name: Build iso file
+        run: sudo mkarchiso -v .
+
+      - name: Rename file
+        run: mv out/*.iso out/arch-live-disk-mgr.iso
+        
+      - uses: shallwefootball/s3-upload-action@master
+        with:
+          aws_key_id: ${{ secrets.AWS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY}}
+          aws_bucket: ${{ secrets.AWS_BUCKET }}
+          source_dir: out/arch-live-disk-mgr.iso
+          endpoint: ${{ secrets.AWS_ENDPOINT }}
