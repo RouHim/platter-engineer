@@ -1,11 +1,14 @@
 <p align="center">
-  <img src="logo.png" width="500">
+  <img src=".github/readme/banner.png" width="500">
 </p>
 
 <p align="center">
-    <i>Platter Engineer is a live arch linux distro optimized for managing, testing and partitioning of disks.</i>
+    <i>Platter Engineer is an arch linux based live image optimized for rescuing, managing, partitioning and testing of disks.</i>
 </p>
 
+<p align="center">
+    <i>Built weekly, based on the latest technologies.</i>
+</p>
 
 <p align="center">
     <img alt="GitHub Workflow Status (with event)" src="https://img.shields.io/github/actions/workflow/status/rouhim/platter-engineer/build.yaml?style=flat-square&color=1793d1">
