@@ -26,6 +26,7 @@ file_permissions=(
   ["/usr/local/bin/livecd-sound"]="0:0:755"
   ["/etc/systemd/system/x11-autologin.service"]="0:0:644"
   ["/etc/environment"]="0:0:644"
+  ["/etc/X11/xorg.conf.d/70-synaptics.conf"]="0:0:644"
   ["/root/.xinitrc"]="0:0:755"
   ["/root/.zprofile"]="0:0:755"
   ["/root/Desktop/epiphany.desktop"]="0:0:755"

@@ -89,15 +89,24 @@ wireless_tools
 wpa_supplicant
 wvdial
 xfsprogs
+xf86-input-synaptics
 
-# System
+# Networking
+networkmanager
+nm-connection-editor
+network-manager-applet
+
+# Xorg and Xfce
 xorg-server
 xorg-xinit
 xorg
 xfce4
-networkmanager
+xfce4-battery-plugin
+xfce4-systemload-plugin
+xfce4-mount-plugin
+xfce4-wavelan-plugin
 
-# Tools
+# Disk Tools
 gnome-disk-utility
 gparted
 epiphany
