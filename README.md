@@ -2,7 +2,7 @@
   <img src="logo.png" width="500">
 </p>
 
-<p align="center" style="color: #1793d1">
+<p align="center">
     <i>Arch Live Disk Manager is a live Arch Linux distro designed for data recovery and partitioning</i>
 </p>
 
