@@ -34,12 +34,12 @@ jobs:
 
       - name: Rename file
         if: github.ref == 'refs/heads/main'
-        run: mv out/*.iso out/arch-live-disk-mgr.iso
+        run: mv out/*.iso out/platter-engineer.iso
 
       - name: Upload iso
         if: github.ref == 'refs/heads/main'
         run: |
           bash .github/scripts/upload-asset-to-release.sh \
             ${{ secrets.RELEASE_TOKEN }} \
-            "out/arch-live-disk-mgr.iso" \
-            "arch-live-disk-mgr.iso"
+            "out/platter-engineer.iso" \
+            "platter-engineer.iso"

@@ -4,7 +4,7 @@ set -e
 # It requires the GitHub Personal Access Token
 
 # The repository name in the format of user/repo
-REPO_NAME=RouHim/arch-live-disk-mgr
+REPO_NAME=RouHim/platter-engineer
 
 # The first argument is the GitHub Personal Access Token
 GITHUB_TOKEN=$1
