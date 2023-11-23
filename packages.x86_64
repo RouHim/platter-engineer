@@ -94,12 +94,10 @@ xfsprogs
 xorg-server
 xorg-xinit
 xorg
-lightdm
 xfce4
 networkmanager
 
 # Tools
 gnome-disk-utility
 gparted
-micro
 epiphany
