@@ -2,6 +2,9 @@
 locale-gen
 localectl set-keymap de
 
+# Start NetworkManger
+systemctl start NetworkManager.service
+
 # Start graphical interface
 if [[ ! $DISPLAY && $XDG_VTNR -eq 1 ]]; then
     # set custom background

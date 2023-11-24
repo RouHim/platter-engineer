@@ -101,10 +101,6 @@ xorg-server
 xorg-xinit
 xorg
 xfce4
-xfce4-battery-plugin
-xfce4-systemload-plugin
-xfce4-mount-plugin
-xfce4-wavelan-plugin
 
 # Disk Tools
 gnome-disk-utility
