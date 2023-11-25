@@ -89,7 +89,9 @@ wireless_tools
 wpa_supplicant
 wvdial
 xfsprogs
-xf86-input-synaptics
+libinput
+xf86-input-libinput
+xorg-xinput
 
 # Networking
 networkmanager

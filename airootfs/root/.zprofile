@@ -1,7 +1,3 @@
-# Set german as default keyboard locale
-locale-gen
-localectl set-keymap de
-
 # Start NetworkManger
 systemctl start NetworkManager.service
 
