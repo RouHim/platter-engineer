@@ -145,28 +145,43 @@ fn build_ui(app: &Application) {
     window.present();
 }
 
+const IP_GEOLOCATION_URL: &str =
+    "https://api-bdc.net/data/ip-geolocation?key=bdc_c13e3a1984864b699e461a25f5a138ed";
+
 fn auto_detect_language() -> (String, String, String) {
-    let json_response: serde_json::Value = ureq::get("https://ipapi.co/json/")
+    let json_response: serde_json::Value = ureq::get(IP_GEOLOCATION_URL)
         .call()
         .unwrap()
         .into_json()
         .unwrap();
 
-    let language_code = json_response["languages"]
+    // country ->isoAlpha2 "DE"
+    let country_code = json_response["country"].as_object().unwrap()["isoAlpha2"]
         .as_str()
         .unwrap()
-        .split(',')
-        .next()
+        .to_string();
+
+    // country -> isoAdminLanguages[0] -> isoAlpha2 "de"
+    let country_admin_code = json_response["country"].as_object().unwrap()["isoAdminLanguages"]
+        .as_array()
+        .unwrap()[0]
+        .as_object()
+        .unwrap()["isoAlpha2"]
+        .as_str()
         .unwrap()
         .to_string();
-    let display_locale = format!(
-        "{}_{}",
-        language_code,
-        json_response["country_code"].as_str().unwrap()
-    );
-    let timezone = json_response["timezone"].as_str().unwrap().to_string();
 
-    (language_code, display_locale, timezone)
+    let display_locale = format!("{}_{}", country_admin_code, country_code);
+
+    // location -> timeZone -> ianaTimeId
+    let timezone = json_response["location"].as_object().unwrap()["timeZone"]
+        .as_object()
+        .unwrap()["ianaTimeId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    (country_admin_code, display_locale, timezone)
 }
 
 fn apply_to_system(keyboard_language_code: &str, display_locale: &str, timezone: &str) {
@@ -191,6 +206,10 @@ fn apply_to_system(keyboard_language_code: &str, display_locale: &str, timezone:
         "timedatectl set-timezone {} --no-ask-password",
         timezone
     ));
+
+    // Apply locale to current session
+    execute_command("unset LANG");
+    execute_command("source /etc/profile.d/locale.sh");
 
     // Reload xfce gui
     execute_command("xfce4-panel -r");
