@@ -4,9 +4,15 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{glib, Application, ApplicationWindow, Button};
 
-const APP_ID: &str = "org.gtk_rs.HelloWorld2";
+const APP_ID: &str = "com.rouhim.easy-language-config";
+
+const IP_GEOLOCATION_URL: &str =
+    "https://api-bdc.net/data/ip-geolocation?key=bdc_c13e3a1984864b699e461a25f5a138ed";
 
 fn main() -> glib::ExitCode {
+    // Ensure that in .zshrc is no 'startxfce4 &' command
+    execute_command("sed -i '/startxfce4/d' ~/.zshrc");
+
     // Create a new application
     let app = Application::builder().application_id(APP_ID).build();
 
@@ -30,13 +36,15 @@ fn build_ui(app: &Application) {
     // Keyboard combo box
     let keyboard_combo_box = Rc::new(RefCell::new(gtk::ComboBoxText::new()));
     // Enable search by type
-    for language_cocde in &language_codes {
+    for language_code in &language_codes {
         keyboard_combo_box
             .borrow()
-            .append(Some(&language_cocde.0), &language_cocde.1);
+            .append(Some(&language_code.0), &language_code.1);
     }
     keyboard_combo_box.borrow().set_hexpand(true);
-    keyboard_combo_box.borrow().set_active_id(Some("en"));
+    keyboard_combo_box
+        .borrow()
+        .set_active_id(Some(&get_current_keyboard_language()));
 
     // Keyboard layout
     let keyboard_layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -58,7 +66,9 @@ fn build_ui(app: &Application) {
             .append(Some(&locale.0), &locale.1);
     }
     display_combo_box.borrow().set_hexpand(true);
-    display_combo_box.borrow().set_active_id(Some("en_US"));
+    display_combo_box
+        .borrow()
+        .set_active_id(Some(&get_current_locale()));
 
     // Display layout
     let display_layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -78,7 +88,9 @@ fn build_ui(app: &Application) {
         timezone_combo_box.borrow().append(Some(timezone), timezone);
     }
     timezone_combo_box.borrow().set_hexpand(true);
-    timezone_combo_box.borrow().set_active_id(Some("UTC"));
+    timezone_combo_box
+        .borrow()
+        .set_active_id(Some(&get_current_timezone()));
 
     // Timezone layout
     let timezone_layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -106,7 +118,7 @@ fn build_ui(app: &Application) {
     });
 
     // Create save button
-    let apply_button = Button::builder().label("Save").build();
+    let apply_button = Button::builder().label("Save & restart").build();
     // When button is clicked, determine current selection of combo boxes and save them
     apply_button.connect_clicked(move |_| {
         if keyboard_combo_box.borrow().active_id().is_none()
@@ -145,8 +157,37 @@ fn build_ui(app: &Application) {
     window.present();
 }
 
-const IP_GEOLOCATION_URL: &str =
-    "https://api-bdc.net/data/ip-geolocation?key=bdc_c13e3a1984864b699e461a25f5a138ed";
+fn get_current_timezone() -> String {
+    execute_command_and_return("timedatectl | grep 'Time zone' | awk '{print $3}'")
+        .trim()
+        .to_string()
+}
+
+/// Returns the current locale in the format "de_DE" without encoding
+fn get_current_locale() -> String {
+    let mut response =
+        execute_command_and_return("localectl | grep 'System Locale' | awk '{print $3}'")
+            .trim()
+            .to_string();
+
+    // If the response contains = split it and return the second part
+    if response.contains('=') {
+        response = response.split('=').collect::<Vec<&str>>()[1].to_string();
+    }
+
+    // Remove encoding
+    response = response.split('.').collect::<Vec<&str>>()[0].to_string();
+
+    response
+}
+
+// Returns the current keyboard language code in the format "de"
+fn get_current_keyboard_language() -> String {
+    let response = execute_command_and_return("localectl | grep 'Keymap' | awk '{print $3}'")
+        .trim()
+        .to_string();
+    response
+}
 
 fn auto_detect_language() -> (String, String, String) {
     let json_response: serde_json::Value = ureq::get(IP_GEOLOCATION_URL)
@@ -185,20 +226,27 @@ fn auto_detect_language() -> (String, String, String) {
 }
 
 fn apply_to_system(keyboard_language_code: &str, display_locale: &str, timezone: &str) {
-    println!("Keyboard: {}", keyboard_language_code);
-    println!("Display: {}", display_locale);
-
-    // Set keyboard layout
+    // Set keyboard layout for current session, and persistent
+    execute_command(&format!("loadkeys {}", keyboard_language_code));
+    execute_command(&format!("localectl set-keymap {}", keyboard_language_code));
     execute_command(&format!(
         "setxkbmap -layout {} -option caps:escape",
         keyboard_language_code
     ));
 
     // Set display language
-    let locale_string = format!("{}.UTF-8", display_locale);
+    // Add to /etc/locale.gen
     execute_command(&format!(
-        "localectl set-locale LANG={} --no-ask-password",
-        locale_string
+        "echo '{}.UTF-8 UTF-8' > /etc/locale.gen",
+        display_locale
+    ));
+    // and run locale-gen
+    execute_command("locale-gen");
+
+    // Set to /etc/locale.conf
+    execute_command(&format!(
+        "localectl set-locale LANG={}.UTF-8 --no-ask-password",
+        display_locale
     ));
 
     // Set timezone
@@ -207,12 +255,19 @@ fn apply_to_system(keyboard_language_code: &str, display_locale: &str, timezone:
         timezone
     ));
 
-    // Apply locale to current session
-    execute_command("unset LANG");
-    execute_command("source /etc/profile.d/locale.sh");
+    // Write also to .zshrc
+    execute_command(&format!(
+        "echo 'export LANG={}.UTF-8' > ~/.zshrc",
+        display_locale
+    ));
 
-    // Reload xfce gui
-    execute_command("xfce4-panel -r");
+    // startxfce4 automatically
+    execute_command("echo 'startxfce4 &' >> ~/.zshrc");
+
+    // Shutdown xfce4
+    execute_command("pkill xfce4");
+
+    std::process::exit(0);
 }
 
 fn execute_command(command: &str) -> bool {
@@ -226,6 +281,16 @@ fn execute_command(command: &str) -> bool {
         return true;
     }
     false
+}
+
+fn execute_command_and_return(command: &str) -> String {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .expect("failed to execute process");
+
+    String::from_utf8(output.stdout).unwrap()
 }
 
 fn get_language_codes() -> Vec<(String, String)> {
