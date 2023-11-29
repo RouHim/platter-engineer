@@ -1,8 +1,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gtk::glib::{closure_local, GString};
 use gtk::prelude::*;
-use gtk::{glib, Application, ApplicationWindow, Button};
+use gtk::{glib, Application, ApplicationWindow, Button, DropDown, StringFilterMatchMode};
 
 const APP_ID: &str = "com.rouhim.easy-language-config";
 
@@ -28,114 +29,141 @@ fn build_ui(app: &Application) {
     let locales = get_locales();
     let timezones = get_timezones();
 
-    // Keyboard label
+    // Keyboard label //////////////////////////////////////////////////////////////////////////////
     let keyboard_label = gtk::Label::new(Some("Keyboard:"));
     keyboard_label.set_xalign(0.0);
     keyboard_label.set_width_chars(15);
 
     // Keyboard combo box
-    let keyboard_combo_box = Rc::new(RefCell::new(gtk::ComboBoxText::new()));
-    // Enable search by type
-    for language_code in &language_codes {
-        keyboard_combo_box
-            .borrow()
-            .append(Some(&language_code.0), &language_code.1);
-    }
-    keyboard_combo_box.borrow().set_hexpand(true);
-    keyboard_combo_box
-        .borrow()
-        .set_active_id(Some(&get_current_keyboard_language()));
+    let keyboard_drop_down = Rc::new(RefCell::new(build_dropdown(get_values(&language_codes))));
+    keyboard_drop_down.borrow().set_hexpand(true);
+    keyboard_drop_down.borrow().set_selected(get_pos_map(
+        &language_codes,
+        &get_current_keyboard_language(),
+    ));
 
     // Keyboard layout
     let keyboard_layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     keyboard_layout.append(&keyboard_label);
-    keyboard_layout.append(&*keyboard_combo_box.borrow());
+    keyboard_layout.append(&*keyboard_drop_down.borrow());
     keyboard_layout.set_margin_bottom(8);
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    // Display label
+    // Display label ///////////////////////////////////////////////////////////////////////////////
     let display_label = gtk::Label::new(Some("Display:"));
     display_label.set_xalign(0.0);
     display_label.set_width_chars(15);
 
     // Display combobox
-    let display_combo_box = Rc::new(RefCell::new(gtk::ComboBoxText::new()));
-    // Enable search by type
-    for locale in &locales {
-        display_combo_box
-            .borrow()
-            .append(Some(&locale.0), &locale.1);
-    }
-    display_combo_box.borrow().set_hexpand(true);
-    display_combo_box
+    let display_drop_down = Rc::new(RefCell::new(build_dropdown(get_values(&locales))));
+    display_drop_down.borrow().set_hexpand(true);
+    display_drop_down
         .borrow()
-        .set_active_id(Some(&get_current_locale()));
+        .set_selected(get_pos_map(&locales, &get_current_locale()));
 
     // Display layout
     let display_layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     display_layout.append(&display_label);
-    display_layout.append(&*display_combo_box.borrow());
+    display_layout.append(&*display_drop_down.borrow());
     display_layout.set_margin_bottom(8);
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    // Timezone label
+    // Timezone label //////////////////////////////////////////////////////////////////////////////
     let timezone_label = gtk::Label::new(Some("Timezone:"));
     timezone_label.set_xalign(0.0);
     timezone_label.set_width_chars(15);
 
     // Timezone combobox
-    let timezone_combo_box = Rc::new(RefCell::new(gtk::ComboBoxText::new()));
-    // Enable search by type
-    for timezone in &timezones {
-        timezone_combo_box.borrow().append(Some(timezone), timezone);
-    }
-    timezone_combo_box.borrow().set_hexpand(true);
-    timezone_combo_box
+    let timezone_drop_down = Rc::new(RefCell::new(build_dropdown(timezones.clone())));
+    timezone_drop_down.borrow().set_hexpand(true);
+    timezone_drop_down
         .borrow()
-        .set_active_id(Some(&get_current_timezone()));
+        .set_selected(get_pos_vec(&timezones, &get_current_timezone()));
 
     // Timezone layout
     let timezone_layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     timezone_layout.append(&timezone_label);
-    timezone_layout.append(&*timezone_combo_box.borrow());
+    timezone_layout.append(&*timezone_drop_down.borrow());
     timezone_layout.set_margin_bottom(8);
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    // Create automatic detection button
+    // Create automatic detection button ///////////////////////////////////////////////////////////
     let auto_detect_button = Button::builder().label("Auto-detect by your IP").build();
     auto_detect_button.set_margin_bottom(8);
-    let keyboard_combo_box_clone = keyboard_combo_box.clone();
-    let display_combo_box_clone = display_combo_box.clone();
-    let timezone_combo_box_clone = timezone_combo_box.clone();
+    let keyboard_drop_down_clone = keyboard_drop_down.clone();
+    let display_combo_drop_down = display_drop_down.clone();
+    let timezone_combo_drop_down = timezone_drop_down.clone();
+    let language_codes_clone = language_codes.clone();
+    let locales_clone = locales.clone();
     auto_detect_button.connect_clicked(move |_| {
         let (keyboard, display, timezone) = match auto_detect_language() {
             Some((keyboard, display, timezone)) => (keyboard, display, timezone),
             None => return,
         };
-        keyboard_combo_box_clone
+        keyboard_drop_down_clone
             .borrow()
-            .set_active_id(Some(&keyboard));
-        display_combo_box_clone
+            .set_selected(get_pos_map(&language_codes_clone, &keyboard));
+        display_combo_drop_down
             .borrow()
-            .set_active_id(Some(&display));
-        timezone_combo_box_clone
+            .set_selected(get_pos_map(&locales_clone, &display));
+        timezone_combo_drop_down
             .borrow()
-            .set_active_id(Some(&timezone));
+            .set_selected(get_pos_vec(&timezones, &timezone));
     });
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    // Create save button
+    // Create save button //////////////////////////////////////////////////////////////////////////
     let apply_button = Button::builder().label("Save & restart").build();
-    // When button is clicked, determine current selection of combo boxes and save them
     apply_button.connect_clicked(move |_| {
-        if keyboard_combo_box.borrow().active_id().is_none()
-            || display_combo_box.borrow().active_id().is_none()
+        if keyboard_drop_down.borrow().selected_item().is_none()
+            || display_drop_down.borrow().selected_item().is_none()
         {
             return;
         }
 
-        let keyboard_selection = keyboard_combo_box.borrow().active_id().unwrap();
-        let display_selection = display_combo_box.borrow().active_id().unwrap();
-        let timezone_selection = timezone_combo_box.borrow().active_id().unwrap();
+        let keyboard_selection: GString = keyboard_drop_down
+            .borrow()
+            .selected_item()
+            .unwrap()
+            .downcast::<gtk::StringObject>()
+            .unwrap()
+            .string();
+        let display_selection = display_drop_down
+            .borrow()
+            .selected_item()
+            .unwrap()
+            .downcast::<gtk::StringObject>()
+            .unwrap()
+            .string();
+        let timezone_selection = timezone_drop_down
+            .borrow()
+            .selected_item()
+            .unwrap()
+            .downcast::<gtk::StringObject>()
+            .unwrap()
+            .string();
 
-        apply_to_system(&keyboard_selection, &display_selection, &timezone_selection);
+        // Get language code from language name
+        let keyboard_selection = language_codes
+            .iter()
+            .filter(|(_, value)| value == &keyboard_selection)
+            .map(|(key, _)| key)
+            .next()
+            .unwrap()
+            .clone();
+
+        // Get locale from locale name
+        let display_selection = locales
+            .iter()
+            .filter(|(_, value)| value == &display_selection)
+            .map(|(key, _)| key)
+            .next()
+            .unwrap()
+            .clone();
+
+        save_to_system(&keyboard_selection, &display_selection, &timezone_selection);
     });
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
     // Create a vertical layout
     let base_layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -158,6 +186,35 @@ fn build_ui(app: &Application) {
 
     // Present window
     window.present();
+}
+
+/// Returns the position of the given key in the given vector
+fn get_pos_map(key_value_map: &[(String, String)], to_select: &str) -> u32 {
+    key_value_map
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.0 == *to_select)
+        .map(|(pos, _)| pos as u32)
+        .next()
+        .unwrap_or(0)
+}
+
+/// Returns the position of the given key in the given vector
+fn get_pos_vec(key_value_vec: &[String], to_select: &str) -> u32 {
+    key_value_vec
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.eq(&to_select))
+        .map(|(pos, _)| pos as u32)
+        .next()
+        .unwrap_or(0)
+}
+
+fn get_values(key_value_vec: &[(String, String)]) -> Vec<String> {
+    key_value_vec
+        .iter()
+        .map(|entry| entry.1.clone())
+        .collect::<Vec<String>>()
 }
 
 fn get_current_timezone() -> String {
@@ -229,7 +286,7 @@ fn auto_detect_language() -> Option<(String, String, String)> {
     Some((country_admin_code, display_locale, timezone))
 }
 
-fn apply_to_system(keyboard_language_code: &str, display_locale: &str, timezone: &str) {
+fn save_to_system(keyboard_language_code: &str, display_locale: &str, timezone: &str) {
     // Set keyboard layout for current session, and persistent
     execute_command(&format!("loadkeys {}", keyboard_language_code));
     execute_command(&format!("localectl set-keymap {}", keyboard_language_code));
@@ -298,18 +355,24 @@ fn execute_command_and_return(command: &str) -> String {
 }
 
 fn get_language_codes() -> Vec<(String, String)> {
-    parse_csv(include_str!("../assets/language-codes_csv.csv"))
+    let mut entries = parse_csv(include_str!("../assets/language-codes_csv.csv"));
+    entries.sort_by(|a, b| a.1.cmp(&b.1));
+    entries
 }
 
 fn get_locales() -> Vec<(String, String)> {
-    parse_csv(include_str!("../assets/locales.csv"))
+    let mut entries = parse_csv(include_str!("../assets/locales.csv"));
+    entries.sort_by(|a, b| a.1.cmp(&b.1));
+    entries
 }
 
 fn get_timezones() -> Vec<String> {
-    include_str!("../assets/timezones.txt")
+    let mut entries: Vec<String> = include_str!("../assets/timezones.txt")
         .lines()
         .map(|s| s.to_string())
-        .collect()
+        .collect();
+    entries.sort();
+    entries
 }
 
 fn parse_csv(csv_data: &str) -> Vec<(String, String)> {
@@ -321,4 +384,25 @@ fn parse_csv(csv_data: &str) -> Vec<(String, String)> {
         entries.push((key.to_string(), value.to_string()));
     }
     entries
+}
+
+fn build_dropdown(string_elements: Vec<String>) -> DropDown {
+    let elements = string_elements
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>();
+    let selection_model = gtk::StringList::new(elements.as_slice());
+    DropDown::builder()
+        .model(&selection_model)
+        .enable_search(true)
+        .search_match_mode(StringFilterMatchMode::Substring)
+        .show_arrow(true)
+        .expression(gtk::ClosureExpression::new::<Option<String>>(
+            gtk::Expression::NONE,
+            closure_local!(move |item: glib::Object| {
+                item.downcast_ref::<gtk::StringObject>()
+                    .map(|item| item.string().to_string())
+            }),
+        ))
+        .build()
 }
