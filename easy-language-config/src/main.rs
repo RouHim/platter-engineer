@@ -105,7 +105,10 @@ fn build_ui(app: &Application) {
     let display_combo_box_clone = display_combo_box.clone();
     let timezone_combo_box_clone = timezone_combo_box.clone();
     auto_detect_button.connect_clicked(move |_| {
-        let (keyboard, display, timezone) = auto_detect_language();
+        let (keyboard, display, timezone) = match auto_detect_language() {
+            Some((keyboard, display, timezone)) => (keyboard, display, timezone),
+            None => return,
+        };
         keyboard_combo_box_clone
             .borrow()
             .set_active_id(Some(&keyboard));
@@ -189,12 +192,13 @@ fn get_current_keyboard_language() -> String {
     response
 }
 
-fn auto_detect_language() -> (String, String, String) {
-    let json_response: serde_json::Value = ureq::get(IP_GEOLOCATION_URL)
-        .call()
-        .unwrap()
-        .into_json()
-        .unwrap();
+fn auto_detect_language() -> Option<(String, String, String)> {
+    let http_response = ureq::get(IP_GEOLOCATION_URL).call();
+
+    let json_response: serde_json::Value = match http_response.is_ok() {
+        false => return None,
+        true => http_response.unwrap().into_json().unwrap(),
+    };
 
     // country ->isoAlpha2 "DE"
     let country_code = json_response["country"].as_object().unwrap()["isoAlpha2"]
@@ -222,7 +226,7 @@ fn auto_detect_language() -> (String, String, String) {
         .unwrap()
         .to_string();
 
-    (country_admin_code, display_locale, timezone)
+    Some((country_admin_code, display_locale, timezone))
 }
 
 fn apply_to_system(keyboard_language_code: &str, display_locale: &str, timezone: &str) {

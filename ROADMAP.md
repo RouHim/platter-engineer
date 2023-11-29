@@ -1,2 +1,0 @@
-# Roadmap
-* Fast locale selector
