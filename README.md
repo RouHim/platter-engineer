@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-    <i>Platter Engineer is an arch linux based live image optimized for rescuing, managing, partitioning and testing of disks.</i>
+    <i>Platter Engineer is an arch linux based live image with a GUI optimized for rescuing, managing, partitioning and testing of disks.</i>
 </p>
 
 <p align="center">
