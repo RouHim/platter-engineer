@@ -252,9 +252,9 @@ fn get_current_keyboard_language() -> String {
 fn auto_detect_language() -> Option<(String, String, String)> {
     let http_response = ureq::get(IP_GEOLOCATION_URL).call();
 
-    let json_response: serde_json::Value = match http_response.is_ok() {
-        false => return None,
-        true => http_response.unwrap().into_json().unwrap(),
+    let json_response: serde_json::Value = match http_response {
+        Err(_) => return None,
+        Ok(mut response) => response.body_mut().read_json().unwrap(),
     };
 
     // country ->isoAlpha2 "DE"
