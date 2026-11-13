@@ -338,10 +338,7 @@ fn execute_command(command: &str) -> bool {
         .output()
         .expect("failed to execute process");
 
-    if output.status.success() {
-        return true;
-    }
-    false
+    output.status.success()
 }
 
 fn execute_command_and_return(command: &str) -> String {
