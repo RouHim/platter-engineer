@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
-use gtk::glib::{closure_local, GString};
+use gtk::glib::{closure_local, spawn_future_local};
 use gtk::prelude::*;
 use gtk::{glib, Application, ApplicationWindow, Button, DropDown, StringFilterMatchMode};
 
@@ -10,36 +11,38 @@ const APP_ID: &str = "com.rouhim.easy-language-config";
 const IP_GEOLOCATION_URL: &str =
     "https://api-bdc.net/data/ip-geolocation?key=bdc_c13e3a1984864b699e461a25f5a138ed";
 
-fn main() -> glib::ExitCode {
-    // Ensure that in .zshrc is no 'startxfce4 &' command
-    execute_command("sed -i '/startxfce4/d' ~/.zshrc");
+const DETECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
-    // Create a new application
+fn main() -> glib::ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
 
-    // Connect to "activate" signal of `app`
     app.connect_activate(build_ui);
 
-    // Run the application
     app.run()
 }
 
 fn build_ui(app: &Application) {
-    let language_codes = get_language_codes();
+    let layouts = get_layouts();
     let locales = get_locales();
     let timezones = get_timezones();
 
+    let status_label = gtk::Label::new(None);
+    status_label.set_xalign(0.0);
+    status_label.set_wrap(true);
+    status_label.set_margin_top(4);
+
     // Keyboard label //////////////////////////////////////////////////////////////////////////////
-    let keyboard_label = gtk::Label::new(Some("Keyboard:"));
+    let keyboard_label = gtk::Label::new(Some("Keyboard layout:"));
     keyboard_label.set_xalign(0.0);
-    keyboard_label.set_width_chars(15);
+    keyboard_label.set_width_chars(17);
 
     // Keyboard combo box
-    let keyboard_drop_down = Rc::new(RefCell::new(build_dropdown(get_values(&language_codes))));
+    let keyboard_drop_down = Rc::new(RefCell::new(build_dropdown(get_values(&layouts))));
     keyboard_drop_down.borrow().set_hexpand(true);
-    keyboard_drop_down.borrow().set_selected(get_pos_map(
-        &language_codes,
-        &get_current_keyboard_language(),
+    keyboard_drop_down.borrow().set_selected(get_pos_map_or(
+        &layouts,
+        &get_current_keyboard_layout(),
+        "us",
     ));
 
     // Keyboard layout
@@ -52,14 +55,16 @@ fn build_ui(app: &Application) {
     // Display label ///////////////////////////////////////////////////////////////////////////////
     let display_label = gtk::Label::new(Some("Display:"));
     display_label.set_xalign(0.0);
-    display_label.set_width_chars(15);
+    display_label.set_width_chars(17);
 
     // Display combobox
     let display_drop_down = Rc::new(RefCell::new(build_dropdown(get_values(&locales))));
     display_drop_down.borrow().set_hexpand(true);
-    display_drop_down
-        .borrow()
-        .set_selected(get_pos_map(&locales, &get_current_locale()));
+    display_drop_down.borrow().set_selected(get_pos_map_or(
+        &locales,
+        &get_current_locale(),
+        "en_US",
+    ));
 
     // Display layout
     let display_layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -71,14 +76,16 @@ fn build_ui(app: &Application) {
     // Timezone label //////////////////////////////////////////////////////////////////////////////
     let timezone_label = gtk::Label::new(Some("Timezone:"));
     timezone_label.set_xalign(0.0);
-    timezone_label.set_width_chars(15);
+    timezone_label.set_width_chars(17);
 
     // Timezone combobox
     let timezone_drop_down = Rc::new(RefCell::new(build_dropdown(timezones.clone())));
     timezone_drop_down.borrow().set_hexpand(true);
-    timezone_drop_down
-        .borrow()
-        .set_selected(get_pos_vec(&timezones, &get_current_timezone()));
+    timezone_drop_down.borrow().set_selected(get_pos_vec_or(
+        &timezones,
+        &get_current_timezone(),
+        "UTC",
+    ));
 
     // Timezone layout
     let timezone_layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -90,78 +97,106 @@ fn build_ui(app: &Application) {
     // Create automatic detection button ///////////////////////////////////////////////////////////
     let auto_detect_button = Button::builder().label("Auto-detect by your IP").build();
     auto_detect_button.set_margin_bottom(8);
-    let keyboard_drop_down_clone = keyboard_drop_down.clone();
-    let display_combo_drop_down = display_drop_down.clone();
-    let timezone_combo_drop_down = timezone_drop_down.clone();
-    let language_codes_clone = language_codes.clone();
-    let locales_clone = locales.clone();
-    auto_detect_button.connect_clicked(move |_| {
-        let (keyboard, display, timezone) = match auto_detect_language() {
-            Some((keyboard, display, timezone)) => (keyboard, display, timezone),
-            None => return,
-        };
-        keyboard_drop_down_clone
-            .borrow()
-            .set_selected(get_pos_map(&language_codes_clone, &keyboard));
-        display_combo_drop_down
-            .borrow()
-            .set_selected(get_pos_map(&locales_clone, &display));
-        timezone_combo_drop_down
-            .borrow()
-            .set_selected(get_pos_vec(&timezones, &timezone));
+
+    let keyboard_for_detect = keyboard_drop_down.clone();
+    let display_for_detect = display_drop_down.clone();
+    let timezone_for_detect = timezone_drop_down.clone();
+    let status_for_detect = status_label.clone();
+    let layouts_for_detect = layouts.clone();
+    let locales_for_detect = locales.clone();
+    let timezones_for_detect = timezones.clone();
+
+    auto_detect_button.connect_clicked(move |button| {
+        let layouts = layouts_for_detect.clone();
+        let locales = locales_for_detect.clone();
+        let timezones = timezones_for_detect.clone();
+        let keyboard = keyboard_for_detect.clone();
+        let display = display_for_detect.clone();
+        let timezone = timezone_for_detect.clone();
+        let status = status_for_detect.clone();
+        let button = button.clone();
+
+        button.set_sensitive(false);
+        status.set_text("Detecting language and timezone…");
+
+        let (sender, receiver) = futures_channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(detect());
+        });
+
+        spawn_future_local(async move {
+            let message = match receiver.await {
+                Ok(Ok(detection)) => {
+                    let keyboard_pos = find_pos_map(&layouts, &detection.layout);
+                    let display_pos = find_pos_map(&locales, &detection.locale);
+                    let timezone_pos = find_pos_vec(&timezones, &detection.timezone);
+
+                    match (keyboard_pos, display_pos, timezone_pos) {
+                        (Some(keyboard_pos), Some(display_pos), Some(timezone_pos)) => {
+                            keyboard.borrow().set_selected(keyboard_pos);
+                            display.borrow().set_selected(display_pos);
+                            timezone.borrow().set_selected(timezone_pos);
+                            "Detected values from your IP. Review them and save.".to_string()
+                        }
+                        _ => format!(
+                            "Auto-detect returned unsupported values: {} / {} / {}",
+                            detection.layout, detection.locale, detection.timezone
+                        ),
+                    }
+                }
+                Ok(Err(error)) => format!("Auto-detect failed: {error}"),
+                Err(_) => "Auto-detect failed: no response".to_string(),
+            };
+
+            status.set_text(&message);
+            button.set_sensitive(true);
+        });
     });
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
     // Create save button //////////////////////////////////////////////////////////////////////////
     let apply_button = Button::builder().label("Save & restart").build();
+
+    let keyboard_for_save = keyboard_drop_down.clone();
+    let display_for_save = display_drop_down.clone();
+    let timezone_for_save = timezone_drop_down.clone();
+    let status_for_save = status_label.clone();
+    let layouts_for_save = layouts;
+    let locales_for_save = locales;
+
     apply_button.connect_clicked(move |_| {
-        if keyboard_drop_down.borrow().selected_item().is_none()
-            || display_drop_down.borrow().selected_item().is_none()
-        {
+        let Some(layout_name) = selected_string(&keyboard_for_save) else {
+            status_for_save.set_text("Select a keyboard layout first.");
             return;
+        };
+        let Some(display_name) = selected_string(&display_for_save) else {
+            status_for_save.set_text("Select a display language first.");
+            return;
+        };
+        let Some(timezone_name) = selected_string(&timezone_for_save) else {
+            status_for_save.set_text("Select a timezone first.");
+            return;
+        };
+
+        let Some((layout, _)) = layouts_for_save
+            .iter()
+            .find(|(_, value)| value == &layout_name)
+        else {
+            status_for_save.set_text("The selected keyboard layout is not known.");
+            return;
+        };
+        let Some((locale, _)) = locales_for_save
+            .iter()
+            .find(|(_, value)| value == &display_name)
+        else {
+            status_for_save.set_text("The selected display language is not known.");
+            return;
+        };
+
+        match save_to_system(layout, locale, &timezone_name) {
+            Ok(()) => std::process::exit(0),
+            Err(error) => status_for_save.set_text(&format!("Could not save settings: {error}")),
         }
-
-        let keyboard_selection: GString = keyboard_drop_down
-            .borrow()
-            .selected_item()
-            .unwrap()
-            .downcast::<gtk::StringObject>()
-            .unwrap()
-            .string();
-        let display_selection = display_drop_down
-            .borrow()
-            .selected_item()
-            .unwrap()
-            .downcast::<gtk::StringObject>()
-            .unwrap()
-            .string();
-        let timezone_selection = timezone_drop_down
-            .borrow()
-            .selected_item()
-            .unwrap()
-            .downcast::<gtk::StringObject>()
-            .unwrap()
-            .string();
-
-        // Get language code from language name
-        let keyboard_selection = language_codes
-            .iter()
-            .filter(|(_, value)| value == &keyboard_selection)
-            .map(|(key, _)| key)
-            .next()
-            .unwrap()
-            .clone();
-
-        // Get locale from locale name
-        let display_selection = locales
-            .iter()
-            .filter(|(_, value)| value == &display_selection)
-            .map(|(key, _)| key)
-            .next()
-            .unwrap()
-            .clone();
-
-        save_to_system(&keyboard_selection, &display_selection, &timezone_selection);
     });
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -176,11 +211,13 @@ fn build_ui(app: &Application) {
     base_layout.append(&display_layout);
     base_layout.append(&timezone_layout);
     base_layout.append(&apply_button);
+    base_layout.append(&status_label);
 
     // Create a window
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Easy language setup")
+        .default_width(620)
         .child(&base_layout)
         .build();
 
@@ -188,25 +225,38 @@ fn build_ui(app: &Application) {
     window.present();
 }
 
-/// Returns the position of the given key in the given vector
-fn get_pos_map(key_value_map: &[(String, String)], to_select: &str) -> u32 {
-    key_value_map
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| entry.0 == *to_select)
-        .map(|(pos, _)| pos as u32)
-        .next()
-        .unwrap_or(0)
+fn selected_string(drop_down: &Rc<RefCell<DropDown>>) -> Option<String> {
+    let item = drop_down.borrow().selected_item()?;
+    item.downcast::<gtk::StringObject>()
+        .ok()
+        .map(|object| object.string().to_string())
 }
 
 /// Returns the position of the given key in the given vector
-fn get_pos_vec(key_value_vec: &[String], to_select: &str) -> u32 {
-    key_value_vec
+fn find_pos_map(key_value_map: &[(String, String)], to_select: &str) -> Option<u32> {
+    key_value_map
         .iter()
-        .enumerate()
-        .filter(|(_, entry)| entry.eq(&to_select))
-        .map(|(pos, _)| pos as u32)
-        .next()
+        .position(|(key, _)| key == to_select)
+        .map(|position| position as u32)
+}
+
+/// Returns the position of the given value in the given vector
+fn find_pos_vec(values: &[String], to_select: &str) -> Option<u32> {
+    values
+        .iter()
+        .position(|value| value == to_select)
+        .map(|position| position as u32)
+}
+
+fn get_pos_map_or(key_value_map: &[(String, String)], to_select: &str, fallback: &str) -> u32 {
+    find_pos_map(key_value_map, to_select)
+        .or_else(|| find_pos_map(key_value_map, fallback))
+        .unwrap_or(0)
+}
+
+fn get_pos_vec_or(values: &[String], to_select: &str, fallback: &str) -> u32 {
+    find_pos_vec(values, to_select)
+        .or_else(|| find_pos_vec(values, fallback))
         .unwrap_or(0)
 }
 
@@ -218,141 +268,211 @@ fn get_values(key_value_vec: &[(String, String)]) -> Vec<String> {
 }
 
 fn get_current_timezone() -> String {
-    execute_command_and_return("timedatectl | grep 'Time zone' | awk '{print $3}'")
-        .trim()
-        .to_string()
+    let timezone = execute_command_and_return("timedatectl show --property=Timezone --value");
+    let timezone = timezone.trim();
+    if timezone.is_empty() {
+        "UTC".to_string()
+    } else {
+        timezone.to_string()
+    }
 }
 
 /// Returns the current locale in the format "de_DE" without encoding
 fn get_current_locale() -> String {
-    let mut response =
-        execute_command_and_return("localectl | grep 'System Locale' | awk '{print $3}'")
+    let output = execute_command_and_return(
+        "localectl status | awk -F'LANG=' '/System Locale/{print $2; exit}'",
+    );
+    let locale = output.trim().split('.').next().unwrap_or("").trim();
+    if locale.is_empty() {
+        "en_US".to_string()
+    } else {
+        locale.to_string()
+    }
+}
+
+/// Returns the current xkb layout in the format "de"
+fn get_current_keyboard_layout() -> String {
+    let output = execute_command_and_return("setxkbmap -query | awk '/^layout:/{print $2; exit}'");
+    let layout = output.trim();
+    if !layout.is_empty() {
+        return layout
+            .split(',')
+            .next()
+            .unwrap_or(layout)
             .trim()
             .to_string();
-
-    // If the response contains = split it and return the second part
-    if response.contains('=') {
-        response = response.split('=').collect::<Vec<&str>>()[1].to_string();
     }
 
-    // Remove encoding
-    response = response.split('.').collect::<Vec<&str>>()[0].to_string();
+    let output =
+        execute_command_and_return("localectl status | awk -F': ' '/X11 Layout/{print $2; exit}'");
+    let layout = output.trim();
+    if !layout.is_empty() && layout != "n/a" {
+        return layout
+            .split(',')
+            .next()
+            .unwrap_or(layout)
+            .trim()
+            .to_string();
+    }
 
-    response
+    "us".to_string()
 }
 
-// Returns the current keyboard language code in the format "de"
-fn get_current_keyboard_language() -> String {
-    let response = execute_command_and_return("localectl | grep 'Keymap' | awk '{print $3}'")
-        .trim()
-        .to_string();
-    response
+fn detect() -> Result<Detection, String> {
+    let (country, timezone) = fetch_geolocation()?;
+    let (locale, layout) = country_default(&country)
+        .ok_or_else(|| format!("no default language for country {country}"))?;
+
+    Ok(Detection {
+        layout,
+        locale,
+        timezone,
+    })
 }
 
-fn auto_detect_language() -> Option<(String, String, String)> {
-    let http_response = ureq::get(IP_GEOLOCATION_URL).call();
+fn fetch_geolocation() -> Result<(String, String), String> {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(DETECTION_TIMEOUT))
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
 
-    let json_response: serde_json::Value = match http_response {
-        Err(_) => return None,
-        Ok(mut response) => response.body_mut().read_json().unwrap(),
-    };
+    let mut response = agent
+        .get(IP_GEOLOCATION_URL)
+        .call()
+        .map_err(|error| format!("request failed: {error}"))?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("could not read response: {error}"))?;
 
-    // country ->isoAlpha2 "DE"
-    let country_code = json_response["country"].as_object().unwrap()["isoAlpha2"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    // country -> isoAdminLanguages[0] -> isoAlpha2 "de"
-    let country_admin_code = json_response["country"].as_object().unwrap()["isoAdminLanguages"]
-        .as_array()
-        .unwrap()[0]
-        .as_object()
-        .unwrap()["isoAlpha2"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let display_locale = format!("{}_{}", country_admin_code, country_code);
-
-    // location -> timeZone -> ianaTimeId
-    let timezone = json_response["location"].as_object().unwrap()["timeZone"]
-        .as_object()
-        .unwrap()["ianaTimeId"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    Some((country_admin_code, display_locale, timezone))
+    parse_geolocation(&body)
 }
 
-fn save_to_system(keyboard_language_code: &str, display_locale: &str, timezone: &str) {
-    // Set keyboard layout for current session, and persistent
-    execute_command(&format!("loadkeys {}", keyboard_language_code));
-    execute_command(&format!("localectl set-keymap {}", keyboard_language_code));
-    execute_command(&format!(
-        "setxkbmap -layout {} -option caps:escape",
-        keyboard_language_code
-    ));
+fn parse_geolocation(json: &str) -> Result<(String, String), String> {
+    let response: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| format!("invalid response: {error}"))?;
 
-    // Set display language
-    // Add to /etc/locale.gen
-    execute_command(&format!(
-        "echo '{}.UTF-8 UTF-8' > /etc/locale.gen",
-        display_locale
-    ));
-    // and run locale-gen
-    execute_command("locale-gen");
+    let country = response
+        .pointer("/country/isoAlpha2")
+        .and_then(|value| value.as_str())
+        .ok_or("response has no country code")?;
+    if country.len() != 2 {
+        return Err(format!("invalid country code: {country}"));
+    }
 
-    // Set to /etc/locale.conf
-    execute_command(&format!(
-        "localectl set-locale LANG={}.UTF-8 --no-ask-password",
-        display_locale
-    ));
+    let timezone = response
+        .pointer("/location/timeZone/ianaTimeId")
+        .and_then(|value| value.as_str())
+        .ok_or("response has no timezone")?;
 
-    // Set timezone
-    execute_command(&format!(
-        "timedatectl set-timezone {} --no-ask-password",
-        timezone
-    ));
-
-    // Write also to .zshrc
-    execute_command(&format!(
-        "echo 'export LANG={}.UTF-8' > ~/.zshrc",
-        display_locale
-    ));
-
-    // startxfce4 automatically
-    execute_command("echo 'startxfce4 &' >> ~/.zshrc");
-
-    // Shutdown xfce4
-    execute_command("pkill xfce4");
-
-    std::process::exit(0);
+    Ok((country.to_ascii_uppercase(), timezone.to_string()))
 }
 
-fn execute_command(command: &str) -> bool {
+fn save_to_system(layout: &str, display_locale: &str, timezone: &str) -> Result<(), String> {
+    // Set the xkb layout for the running session and persist it for X11.
+    run_step(&format!("setxkbmap -layout {layout}"))?;
+    run_step(&format!("localectl set-x11-keymap {layout}"))?;
+
+    // The virtual console uses a separate keymap namespace. Only touch it when
+    // a matching kbd keymap is known.
+    if let Some(keymap) = vconsole_keymap(layout) {
+        run_step(&format!("loadkeys {keymap}"))?;
+        run_step(&format!("localectl set-keymap --no-convert {keymap}"))?;
+    }
+
+    // Set the display language.
+    run_step(&format!(
+        "printf '%s.UTF-8 UTF-8\n' '{display_locale}' > /etc/locale.gen"
+    ))?;
+    run_step("locale-gen")?;
+    run_step(&format!("localectl set-locale LANG={display_locale}.UTF-8"))?;
+
+    // Set the timezone.
+    run_step(&format!("timedatectl set-timezone {timezone}"))?;
+
+    // Restart the XFCE session; getty autologin brings it back up.
+    run_step("pkill -x xfce4-session")
+}
+
+fn vconsole_keymap(layout: &str) -> Option<&'static str> {
+    Some(match layout {
+        "us" => "us",
+        "gb" => "uk",
+        "de" => "de",
+        "at" => "de",
+        "ch" => "de_CH-latin1",
+        "be" => "be-latin1",
+        "fr" => "fr",
+        "es" | "latam" => "es",
+        "pt" => "pt-latin1",
+        "br" => "br-abnt2",
+        "it" => "it",
+        "nl" => "nl",
+        "no" => "no",
+        "dk" => "dk",
+        "se" => "sv-latin1",
+        "fi" => "fi",
+        "is" => "is-latin1",
+        "pl" => "pl",
+        "cz" => "cz",
+        "sk" => "sk-qwertz",
+        "hu" => "hu",
+        "ro" => "ro",
+        "ru" => "ru",
+        "ua" => "ua",
+        "by" => "by",
+        "bg" => "bg_pho-utf8",
+        "gr" => "gr",
+        "tr" => "trq",
+        "il" => "il",
+        "ir" => "fa",
+        "jp" => "jp106",
+        "rs" => "sr-latin",
+        "hr" => "croat",
+        "si" => "slovene",
+        "mk" => "mk-utf",
+        "ge" => "ge",
+        "kz" => "kazakh",
+        "kg" => "kyrgyz",
+        "ie" => "ie",
+        "ca" => "ca",
+        _ => return None,
+    })
+}
+
+fn run_step(command: &str) -> Result<(), String> {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .output()
-        .expect("failed to execute process");
+        .map_err(|error| format!("could not run `{command}`: {error}"))?;
 
-    output.status.success()
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        Err(format!("`{command}` failed"))
+    } else {
+        Err(format!("`{command}` failed: {stderr}"))
+    }
 }
 
 fn execute_command_and_return(command: &str) -> String {
-    let output = std::process::Command::new("sh")
+    match std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .output()
-        .expect("failed to execute process");
-
-    String::from_utf8(output.stdout).unwrap()
+    {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+        Err(_) => String::new(),
+    }
 }
 
-fn get_language_codes() -> Vec<(String, String)> {
-    let mut entries = parse_csv(include_str!("../assets/language-codes_csv.csv"));
+fn get_layouts() -> Vec<(String, String)> {
+    let mut entries = parse_csv(include_str!("../assets/layouts.csv"));
     entries.sort_by(|a, b| a.1.cmp(&b.1));
     entries
 }
@@ -366,21 +486,40 @@ fn get_locales() -> Vec<(String, String)> {
 fn get_timezones() -> Vec<String> {
     let mut entries: Vec<String> = include_str!("../assets/timezones.txt")
         .lines()
-        .map(|s| s.to_string())
+        .map(|line| line.to_string())
         .collect();
     entries.sort();
     entries
 }
 
-fn parse_csv(csv_data: &str) -> Vec<(String, String)> {
-    let mut entries = Vec::new();
-    for line in csv_data.lines().skip(1) {
-        let mut line_split = line.split(',');
-        let key = line_split.next().unwrap().trim();
-        let value = line_split.next().unwrap().trim();
-        entries.push((key.to_string(), value.to_string()));
+fn country_default(country: &str) -> Option<(String, String)> {
+    let country = country.trim().to_ascii_uppercase();
+    for line in include_str!("../assets/country_defaults.csv")
+        .lines()
+        .skip(1)
+    {
+        let mut parts = line.splitn(3, ',');
+        let (Some(code), Some(locale), Some(layout)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if code == country {
+            return Some((locale.to_string(), layout.to_string()));
+        }
     }
-    entries
+    None
+}
+
+fn parse_csv(csv_data: &str) -> Vec<(String, String)> {
+    csv_data
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let (key, value) = line.split_once(',')?;
+            Some((key.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
 }
 
 fn build_dropdown(string_elements: Vec<String>) -> DropDown {
@@ -402,4 +541,128 @@ fn build_dropdown(string_elements: Vec<String>) -> DropDown {
             }),
         ))
         .build()
+}
+
+struct Detection {
+    layout: String,
+    locale: String,
+    timezone: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_csv_keeps_commas_in_display_names() {
+        let rows = parse_csv("id,value\nbs_Cyrl_BA,Bosnian (Cyrillic, Bosnia & Herzegovina)\n");
+        assert_eq!(
+            rows,
+            vec![(
+                "bs_Cyrl_BA".to_string(),
+                "Bosnian (Cyrillic, Bosnia & Herzegovina)".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn locale_and_layout_names_are_unique() {
+        let mut locales = get_values(&get_locales());
+        let locale_count = locales.len();
+        locales.sort();
+        locales.dedup();
+        assert_eq!(locales.len(), locale_count);
+
+        let mut layouts = get_values(&get_layouts());
+        let layout_count = layouts.len();
+        layouts.sort();
+        layouts.dedup();
+        assert_eq!(layouts.len(), layout_count);
+    }
+
+    #[test]
+    fn generated_country_defaults_reference_known_values() {
+        let locales = get_locales();
+        let layouts = get_layouts();
+
+        let mut count = 0;
+        for line in include_str!("../assets/country_defaults.csv")
+            .lines()
+            .skip(1)
+        {
+            let mut parts = line.splitn(3, ',');
+            let (Some(country), Some(locale), Some(layout)) =
+                (parts.next(), parts.next(), parts.next())
+            else {
+                panic!("malformed country default: {line}");
+            };
+
+            assert_eq!(country.len(), 2, "invalid country code: {country}");
+            assert!(
+                locales.iter().any(|(key, _)| key == locale),
+                "unknown locale {locale} for {country}"
+            );
+            assert!(
+                layouts.iter().any(|(key, _)| key == layout),
+                "unknown layout {layout} for {country}"
+            );
+            count += 1;
+        }
+        assert_eq!(count, 257);
+    }
+
+    #[test]
+    fn country_default_lookup_is_case_insensitive() {
+        assert_eq!(
+            country_default("DE"),
+            Some(("de_DE".to_string(), "de".to_string()))
+        );
+        assert_eq!(
+            country_default("ch"),
+            Some(("de_CH".to_string(), "ch".to_string()))
+        );
+        assert_eq!(country_default("ZZ"), None);
+    }
+
+    #[test]
+    fn geolocation_parsing_ignores_missing_admin_languages() {
+        let json = r#"{
+            "country": {"isoAlpha2": "DE", "isoAdminLanguages": []},
+            "location": {"timeZone": {"ianaTimeId": "Europe/Berlin"}}
+        }"#;
+        assert_eq!(
+            parse_geolocation(json),
+            Ok(("DE".to_string(), "Europe/Berlin".to_string()))
+        );
+    }
+
+    #[test]
+    fn geolocation_parsing_rejects_incomplete_responses() {
+        assert!(parse_geolocation("{}").is_err());
+        assert!(parse_geolocation(r#"{"country": {"isoAlpha2": "DE"}, "location": {}}"#).is_err());
+        assert!(parse_geolocation(r#"{"country": {"isoAlpha2": "D"}}"#).is_err());
+        assert!(parse_geolocation("not json").is_err());
+    }
+
+    #[test]
+    fn selection_falls_back_to_sane_defaults() {
+        let locales = get_locales();
+        assert_eq!(
+            get_pos_map_or(&locales, "C", "en_US"),
+            get_pos_map_or(&locales, "en_US", "en_US")
+        );
+
+        let timezones = get_timezones();
+        assert_eq!(
+            get_pos_vec_or(&timezones, "Mars/Olympus", "UTC"),
+            get_pos_vec_or(&timezones, "UTC", "UTC")
+        );
+    }
+
+    #[test]
+    fn vconsole_keymaps_are_known() {
+        assert_eq!(vconsole_keymap("ch"), Some("de_CH-latin1"));
+        assert_eq!(vconsole_keymap("gb"), Some("uk"));
+        assert_eq!(vconsole_keymap("cn"), None);
+    }
 }
