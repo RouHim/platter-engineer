@@ -369,29 +369,40 @@ fn parse_geolocation(json: &str) -> Result<(String, String), String> {
 }
 
 fn save_to_system(layout: &str, display_locale: &str, timezone: &str) -> Result<(), String> {
+    for command in settings_commands(layout, display_locale, timezone) {
+        run_step(&command)?;
+    }
+    Ok(())
+}
+
+fn settings_commands(layout: &str, display_locale: &str, timezone: &str) -> Vec<String> {
     // Set the xkb layout for the running session and persist it for X11.
-    run_step(&format!("setxkbmap -layout {layout}"))?;
-    run_step(&format!("localectl set-x11-keymap {layout}"))?;
+    let mut commands = vec![
+        format!("setxkbmap -layout {layout}"),
+        format!("localectl set-x11-keymap {layout}"),
+    ];
 
     // The virtual console uses a separate keymap namespace. Only touch it when
     // a matching kbd keymap is known.
     if let Some(keymap) = vconsole_keymap(layout) {
-        run_step(&format!("loadkeys {keymap}"))?;
-        run_step(&format!("localectl set-keymap --no-convert {keymap}"))?;
+        commands.push(format!("loadkeys {keymap}"));
+        commands.push(format!("localectl set-keymap --no-convert {keymap}"));
     }
 
     // Set the display language.
-    run_step(&format!(
-        "printf '%s.UTF-8 UTF-8\n' '{display_locale}' > /etc/locale.gen"
-    ))?;
-    run_step("locale-gen")?;
-    run_step(&format!("localectl set-locale LANG={display_locale}.UTF-8"))?;
+    commands.push(format!(
+        "printf '%s.UTF-8 UTF-8\\n' '{display_locale}' > /etc/locale.gen"
+    ));
+    commands.push("locale-gen".to_string());
+    commands.push(format!("localectl set-locale LANG={display_locale}.UTF-8"));
 
     // Set the timezone.
-    run_step(&format!("timedatectl set-timezone {timezone}"))?;
+    commands.push(format!("timedatectl set-timezone {timezone}"));
 
     // Restart the XFCE session; getty autologin brings it back up.
-    run_step("pkill -x xfce4-session")
+    commands.push("pkill -x xfce4-session".to_string());
+
+    commands
 }
 
 fn vconsole_keymap(layout: &str) -> Option<&'static str> {
@@ -657,6 +668,33 @@ mod tests {
             get_pos_vec_or(&timezones, "Mars/Olympus", "UTC"),
             get_pos_vec_or(&timezones, "UTC", "UTC")
         );
+    }
+
+    #[test]
+    fn save_commands_cover_layout_locale_and_console() {
+        let commands = settings_commands("ch", "de_CH", "Europe/Zurich");
+        assert!(commands.contains(&"setxkbmap -layout ch".to_string()));
+        assert!(commands.contains(&"localectl set-x11-keymap ch".to_string()));
+        assert!(commands.contains(&"loadkeys de_CH-latin1".to_string()));
+        assert!(commands.contains(&"localectl set-keymap --no-convert de_CH-latin1".to_string()));
+        assert!(
+            commands.contains(&"printf '%s.UTF-8 UTF-8\\n' 'de_CH' > /etc/locale.gen".to_string())
+        );
+        assert!(commands.contains(&"localectl set-locale LANG=de_CH.UTF-8".to_string()));
+        assert!(commands.contains(&"timedatectl set-timezone Europe/Zurich".to_string()));
+        assert!(commands.contains(&"pkill -x xfce4-session".to_string()));
+        assert!(!commands.iter().any(|command| command.contains(".zshrc")));
+        assert!(!commands
+            .iter()
+            .any(|command| command.contains("caps:escape")));
+
+        let commands = settings_commands("cn", "zh_CN", "Asia/Shanghai");
+        assert!(!commands
+            .iter()
+            .any(|command| command.starts_with("loadkeys")));
+        assert!(!commands
+            .iter()
+            .any(|command| command.contains("set-keymap")));
     }
 
     #[test]
