@@ -680,6 +680,21 @@ mod tests {
     }
 
     #[test]
+    fn bundled_locales_are_glibc_utf8_names() {
+        for (id, name) in get_locales() {
+            assert!(!name.is_empty(), "locale {id} has no display name");
+            assert!(
+                id.contains('_') || id == "eo",
+                "locale id {id} cannot be passed to LANG"
+            );
+            assert!(
+                !id.contains('.'),
+                "locale id {id} must not carry an encoding"
+            );
+        }
+    }
+
+    #[test]
     fn save_commands_cover_layout_locale_and_console() {
         let commands = settings_commands("ch", "de_CH", "Europe/Zurich");
         assert!(commands.contains(&"setxkbmap -layout ch".to_string()));

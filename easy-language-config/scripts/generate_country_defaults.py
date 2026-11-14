@@ -6,6 +6,7 @@ Sources:
 - xkeyboard-config evdev.xml (Arch: /usr/share/X11/xkb/rules/evdev.xml)
 - iso-codes iso_639-2.json (Arch: /usr/share/iso-codes/json/iso_639-2.json)
 - assets/locales.csv (glibc locales shipped with the app)
+- /usr/share/i18n/SUPPORTED (glibc locale definitions; keeps only UTF-8 locales)
 
 Outputs:
 - assets/country_defaults.csv: country ISO2, glibc locale, xkb layout
@@ -33,6 +34,61 @@ CLDR_URL = (
     "https://raw.githubusercontent.com/unicode-org/cldr/release-49/"
     "common/supplemental/supplementalData.xml"
 )
+
+# Preferred locale per language when the country has no dedicated glibc locale.
+PREFERRED_LOCALE = {
+    "ar": "ar_SA",
+    "bn": "bn_BD",
+    "ca": "ca_ES",
+    "cs": "cs_CZ",
+    "da": "da_DK",
+    "de": "de_DE",
+    "el": "el_GR",
+    "en": "en_US",
+    "es": "es_ES",
+    "fa": "fa_IR",
+    "fi": "fi_FI",
+    "fr": "fr_FR",
+    "he": "he_IL",
+    "hi": "hi_IN",
+    "hr": "hr_HR",
+    "hu": "hu_HU",
+    "hy": "hy_AM",
+    "id": "id_ID",
+    "is": "is_IS",
+    "it": "it_IT",
+    "ja": "ja_JP",
+    "ka": "ka_GE",
+    "kk": "kk_KZ",
+    "km": "km_KH",
+    "ko": "ko_KR",
+    "lo": "lo_LA",
+    "lt": "lt_LT",
+    "lv": "lv_LV",
+    "mk": "mk_MK",
+    "mn": "mn_MN",
+    "my": "my_MM",
+    "nb": "nb_NO",
+    "ne": "ne_NP",
+    "nl": "nl_NL",
+    "no": "nb_NO",
+    "pl": "pl_PL",
+    "pt": "pt_PT",
+    "ro": "ro_RO",
+    "ru": "ru_RU",
+    "si": "si_LK",
+    "sk": "sk_SK",
+    "sl": "sl_SI",
+    "sq": "sq_AL",
+    "sr": "sr_RS",
+    "sv": "sv_SE",
+    "th": "th_TH",
+    "tr": "tr_TR",
+    "uk": "uk_UA",
+    "ur": "ur_PK",
+    "vi": "vi_VN",
+    "zh": "zh_CN",
+}
 
 # Preferred layout per language when the layout has no countryList entry for
 # the territory. Values are xkb layout ids.
@@ -119,6 +175,22 @@ def load_layouts(path: pathlib.Path, alpha3_to_alpha2: dict[str, str]):
     return layouts, by_country, by_language
 
 
+def load_supported_locales(path: pathlib.Path) -> set[str]:
+    """Return glibc locale names that provide a UTF-8 charmap."""
+    supported = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[1] != "UTF-8":
+            continue
+        name = parts[0]
+        # The app appends ".UTF-8" to the locale id, so @modifier entries would
+        # produce an invalid LANG value. Skip them.
+        if "@" in name:
+            continue
+        supported.add(name.split(".")[0])
+    return supported
+
+
 def load_primary_languages(path: pathlib.Path) -> dict[str, str]:
     """Map territory to its most spoken official language."""
     primary = {}
@@ -169,6 +241,9 @@ def choose_locale(language: str, country: str, locales: set[str]) -> str:
     for locale in sorted(locales):
         if locale.endswith(f"_{country}"):
             return locale
+    preferred = PREFERRED_LOCALE.get(language)
+    if preferred in locales:
+        return preferred
     return "en_US"
 
 
@@ -177,6 +252,7 @@ def main() -> int:
     parser.add_argument("--cldr", type=pathlib.Path, help="local supplementalData.xml")
     parser.add_argument("--evdev", type=pathlib.Path, default=pathlib.Path("/usr/share/X11/xkb/rules/evdev.xml"))
     parser.add_argument("--iso639", type=pathlib.Path, default=pathlib.Path("/usr/share/iso-codes/json/iso_639-2.json"))
+    parser.add_argument("--supported", type=pathlib.Path, default=pathlib.Path("/usr/share/i18n/SUPPORTED"))
     parser.add_argument("--assets", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parent.parent / "assets")
     args = parser.parse_args()
 
@@ -185,6 +261,9 @@ def main() -> int:
         return 1
     if not args.iso639.is_file():
         print(f"missing iso-codes data: {args.iso639} (install iso-codes)", file=sys.stderr)
+        return 1
+    if not args.supported.is_file():
+        print(f"missing glibc locale list: {args.supported}", file=sys.stderr)
         return 1
 
     if args.cldr:
@@ -197,11 +276,20 @@ def main() -> int:
         temporary.close()
         cldr_path = pathlib.Path(temporary.name)
 
-    locales = {
-        row[0]
-        for row in csv.reader((args.assets / "locales.csv").open(encoding="utf-8"))
-    }
-    locales.discard("id")
+    supported = load_supported_locales(args.supported)
+    locale_rows = [
+        row
+        for row in list(csv.reader((args.assets / "locales.csv").open(encoding="utf-8")))[1:]
+        if row and row[0] in supported
+    ]
+    if not locale_rows:
+        print("no supported locales left in locales.csv", file=sys.stderr)
+        return 1
+    with (args.assets / "locales.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(["id", "value"])
+        writer.writerows(locale_rows)
+    locales = {row[0] for row in locale_rows}
 
     alpha3_to_alpha2 = load_iso639(args.iso639)
     layouts, by_country, by_language = load_layouts(args.evdev, alpha3_to_alpha2)
@@ -240,7 +328,10 @@ def main() -> int:
     if temporary:
         pathlib.Path(temporary.name).unlink(missing_ok=True)
 
-    print(f"wrote {len(rows)} countries and {len(layouts)} layouts to {args.assets}")
+    print(
+        f"wrote {len(rows)} countries, {len(layouts)} layouts, "
+        f"and {len(locale_rows)} locales to {args.assets}"
+    )
     return 0
 
 
