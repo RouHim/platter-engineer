@@ -1,4 +1,4 @@
-#!/bin/env bash
+#!/usr/bin/env bash
 set -e
 # This script uploads a file to the latest release of the repository
 # It requires the GitHub Personal Access Token

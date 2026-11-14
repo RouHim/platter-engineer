@@ -8,9 +8,7 @@ iso_application="Platter Engineer"
 iso_version="$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)"
 install_dir="arch"
 buildmodes=('iso')
-bootmodes=('bios.syslinux.mbr' 'bios.syslinux.eltorito'
-           'uefi-ia32.grub.esp' 'uefi-x64.grub.esp'
-           'uefi-ia32.grub.eltorito' 'uefi-x64.grub.eltorito')
+bootmodes=('bios.syslinux' 'uefi.grub')
 arch="x86_64"
 pacman_conf="pacman.conf"
 airootfs_image_type="squashfs"
@@ -29,7 +27,6 @@ file_permissions=(
   ["/usr/local/bin/livecd-sound"]="0:0:755"
   ["/usr/local/bin/easy-language-config"]="0:0:755"
   ["/etc/localtime"]="0:0:644"
-  ["/etc/systemd/system/x11-autologin.service"]="0:0:644"
   ["/etc/systemd/system/multi-user.target.wants/NetworkManager.service"]="0:0:644"
   ["/etc/systemd/system/dbus-org.freedesktop.nm-dispatcher.service"]="0:0:644"
   ["/etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service"]="0:0:644"
