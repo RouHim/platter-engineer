@@ -4,3 +4,4 @@ out/
 *.iml
 .vscode
 .code
+airootfs/usr/local/bin/easy-language-config

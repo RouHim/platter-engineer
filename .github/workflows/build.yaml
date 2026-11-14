@@ -27,10 +27,19 @@ jobs:
           fetch-depth: 1
 
       - name: Install dependencies
-        run: pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso jq grub
+        run: pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso jq grub rust pkgconf gtk4
+
+      - name: Test easy-language-config
+        run: cargo test --release --locked --manifest-path easy-language-config/Cargo.toml
+
+      - name: Build easy-language-config
+        run: cargo build --release --locked --manifest-path easy-language-config/Cargo.toml
+
+      - name: Install easy-language-config into airootfs
+        run: install -Dm755 easy-language-config/target/release/easy-language-config airootfs/usr/local/bin/easy-language-config
 
       - name: Build iso file
-        run: sudo mkarchiso -v .
+        run: mkarchiso -v .
 
       - name: Rename file
         if: github.ref == 'refs/heads/main'

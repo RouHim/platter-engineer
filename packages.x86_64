@@ -3,7 +3,6 @@ b43-fwcutter
 base
 bind
 bolt
-broadcom-wl
 btrfs-progs
 clonezilla
 cryptsetup
@@ -102,6 +101,7 @@ xorg-server
 xorg-xinit
 xorg
 xfce4
+gtk4
 
 # Disk Tools
 gnome-disk-utility
