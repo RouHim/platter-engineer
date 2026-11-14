@@ -369,8 +369,17 @@ fn parse_geolocation(json: &str) -> Result<(String, String), String> {
 }
 
 fn save_to_system(layout: &str, display_locale: &str, timezone: &str) -> Result<(), String> {
+    save_with(layout, display_locale, timezone, run_step)
+}
+
+fn save_with(
+    layout: &str,
+    display_locale: &str,
+    timezone: &str,
+    mut run: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
     for command in settings_commands(layout, display_locale, timezone) {
-        run_step(&command)?;
+        run(&command)?;
     }
     Ok(())
 }
@@ -695,6 +704,31 @@ mod tests {
         assert!(!commands
             .iter()
             .any(|command| command.contains("set-keymap")));
+    }
+
+    #[test]
+    fn save_runs_all_commands_and_stops_on_failure() {
+        let expected = settings_commands("ch", "de_CH", "Europe/Zurich");
+        let mut executed = Vec::new();
+        let result = save_with("ch", "de_CH", "Europe/Zurich", |command| {
+            executed.push(command.to_string());
+            Ok(())
+        });
+        assert_eq!(result, Ok(()));
+        assert_eq!(executed, expected);
+
+        let mut executed = Vec::new();
+        let result = save_with("ch", "de_CH", "Europe/Zurich", |command| {
+            executed.push(command.to_string());
+            if command == "locale-gen" {
+                Err("locale-gen failed".to_string())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result, Err("locale-gen failed".to_string()));
+        assert_eq!(executed.last().map(String::as_str), Some("locale-gen"));
+        assert!(!executed.iter().any(|command| command.contains("pkill")));
     }
 
     #[test]
