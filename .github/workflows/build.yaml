@@ -42,6 +42,13 @@ jobs:
         with:
           fetch-depth: 0 # semantic-release needs the full history and every tag
 
+      # The runner owns the workspace directory while steps run as root inside this
+      # container, so git refuses to operate on it ("dubious ownership"). The
+      # safe.directory entry actions/checkout writes goes into a temporary HOME that
+      # is discarded when the step ends, so record it for every later step.
+      - name: Trust the workspace for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Install dependencies
         run: pacman -S --noconfirm base-devel archiso grub rust pkgconf gtk4 nodejs npm github-cli jq
 
