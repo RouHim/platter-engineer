@@ -2,16 +2,27 @@ name: Build
 
 on:
   push:
-  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+    branches:
+      - main
   pull_request:
     types:
       - opened
+      - synchronize
+      - reopened
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
   schedule:
     - cron: "0 0 * * 0" # weekly at sunday night
 
+permissions:
+  contents: write # semantic-release pushes the release tag and creates the release
+  issues: write # @semantic-release/github comments on released issues
+  pull-requests: write # @semantic-release/github comments on released pull requests
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Publishing must never be cancelled halfway: the tag would exist without its
+  # release, and the next run would bump past it. Pull requests stay cancellable.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -22,12 +33,20 @@ jobs:
 
     steps:
 
+      # git has to exist before checkout: without it actions/checkout silently
+      # downloads a tarball instead, leaving no history, tags or push credentials.
+      - name: Install git
+        run: pacman -Syyu --noconfirm && pacman -S --noconfirm git
+
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 1
+          fetch-depth: 0 # semantic-release needs the full history and every tag
 
       - name: Install dependencies
-        run: pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso jq grub rust pkgconf gtk4
+        run: pacman -S --noconfirm base-devel archiso grub rust pkgconf gtk4 nodejs npm github-cli jq
+
+      - name: Install release tooling
+        run: npm ci
 
       - name: Test easy-language-config
         run: cargo test --release --locked --manifest-path easy-language-config/Cargo.toml
@@ -38,17 +57,152 @@ jobs:
       - name: Install easy-language-config into airootfs
         run: install -Dm755 easy-language-config/target/release/easy-language-config airootfs/usr/local/bin/easy-language-config
 
-      - name: Build iso file
-        run: mkarchiso -v .
-
-      - name: Rename file
-        if: github.ref == 'refs/heads/main'
-        run: mv out/*.iso out/platter-engineer.iso
-
-      - name: Upload iso
-        if: github.ref == 'refs/heads/main'
+      # A scheduled run has no commits of its own, so semantic-release would find
+      # nothing to release and the freshly built ISO would be discarded. The empty
+      # commit makes the weekly package refresh an actual patch release.
+      - name: Record weekly rebuild commit
+        if: github.event_name == 'schedule'
         run: |
-          bash .github/scripts/upload-asset-to-release.sh \
-            ${{ secrets.RELEASE_TOKEN }} \
-            "out/platter-engineer.iso" \
-            "platter-engineer.iso"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "fix(iso): weekly rebuild with current Arch packages"
+          # The checkout is minutes old by now, so main may have advanced while the
+          # system upgrade and the cargo steps ran. Without integrating it the push
+          # is rejected as non-fast-forward and the week's only release is lost.
+          # The working tree is clean apart from gitignored build output, so a plain
+          # rebase is enough.
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
+
+      # The ISO build needs the version up front, but semantic-release only exposes
+      # it in `prepare`/`publish`, which are skipped in dry-run mode. The
+      # verifyRelease plugin runs in dry-run mode and writes .iso-version.
+      # Pull requests exit early (nothing to publish) and yield an empty version.
+      - name: Determine next release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          rm -f .iso-version
+          npx semantic-release --dry-run
+
+          version="$(cat .iso-version 2>/dev/null || true)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$version" ]; then
+            # An empty version is not always "nothing to release": a dry run also
+            # exits 0 when it finds the local branch behind the remote, because
+            # main advanced while the earlier steps ran. Say which case it was, so
+            # a skipped build is not mistaken for a run with nothing to publish.
+            behind=""
+            if { [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "schedule" ]; } \
+              && git fetch --quiet origin main \
+              && git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null \
+              && ! git merge-base --is-ancestor refs/remotes/origin/main HEAD; then
+              behind=true
+            fi
+            if [ -n "$behind" ]; then
+              echo "::warning::No release computed: main advanced while this run was in progress, so the newer push run will publish this change."
+            else
+              echo "No release warranted, skipping build and publish."
+            fi
+          else
+            echo "Releasing ${version}."
+          fi
+
+      # Pull requests and manual runs build without a version: the profile still has
+      # to compile, and profiledef.sh falls back to the build date in that case.
+      - name: Build iso file
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || steps.release.outputs.version != ''
+        env:
+          ISO_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          mkarchiso -v .
+          mv out/*.iso out/platter-engineer.iso
+
+      # Creates the release as a draft, uploads the ISO and only then publishes it,
+      # so the download link never points at a release without its asset.
+      # semantic-release also exits 0 when it decides not to publish, so the result
+      # is verified instead of trusted: green now means a published release exists.
+      - name: Publish release
+        id: publish
+        if: steps.release.outputs.version != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          npx semantic-release
+
+          if ! state="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"; then
+            echo "semantic-release published no release for ${VERSION}." >&2
+            exit 1
+          fi
+          if [ "$state" != "false" ]; then
+            echo "Release ${VERSION} is still a draft." >&2
+            exit 1
+          fi
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the newest 3 releases
+        if: steps.publish.outputs.published == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/prune-releases.sh
+
+      # semantic-release pushes the tag before it publishes, so a failed publish
+      # leaves a remote tag whose release never got past the draft stage. Left
+      # alone, the next run would compute the version from that tag and bump past
+      # it, and the draft with its ~1.6 GB asset would never be reclaimed. Removing
+      # both lets a re-run compute and publish the same version again.
+      # The job status alone does not mean the release is broken: publication
+      # happens before the github plugin's success hook (repo lookup, associated
+      # PRs, comments), which can throw, and the verification in the publish step
+      # can fail transiently. So the state of the release decides, never `published`.
+      # Cancellation is covered as well, because a run cancelled while the asset
+      # uploads leaves the same stranded tag and draft behind.
+      - name: Recover from failed release
+        if: (failure() || cancelled()) && steps.release.outputs.version != '' && steps.publish.outputs.published != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          # Only positive evidence may destroy anything here. A failed lookup says
+          # nothing about the release: a transient 5xx, rate limit or timeout must
+          # never be mistaken for a draft, or a live release with its asset would be
+          # deleted. So the state is read with its error text and split three ways.
+          state=""
+          status=0
+          stderr_file="$(mktemp)"
+          output="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>"$stderr_file")" || status=$?
+          reason="$(cat "$stderr_file")"
+          rm -f "$stderr_file"
+
+          if [ "$status" -ne 0 ]; then
+            if ! printf '%s\n' "$reason" | grep -qi 'release not found'; then
+              echo "::warning::Could not read the state of release ${VERSION}, keeping its release and tag untouched: ${reason}"
+              exit 0
+            fi
+            # Release absent: only a stranded tag can be left behind, so `state`
+            # stays empty and the deletion path below is the correct one.
+          else
+            state="$output"
+          fi
+
+          if [ "$state" = "false" ]; then
+            echo "Release ${VERSION} is already published, keeping its release and tag."
+            exit 0
+          fi
+
+          echo "Release ${VERSION} did not publish, deleting its release and tag."
+          gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --yes || true
+          git push origin ":refs/tags/${VERSION}" || true
+
+          # Warnings instead of failures: the job already reports the original error.
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::warning::Release ${VERSION} survived the cleanup."
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::warning::Tag ${VERSION} survived the cleanup."
+          fi
