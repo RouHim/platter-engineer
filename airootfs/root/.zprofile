@@ -9,6 +9,7 @@ if [[ ! $DISPLAY && $XDG_VTNR -eq 1 ]]; then
     # Set Theme to Adwaita-dark
     xfconf-query -c xsettings -p /Net/ThemeName -s "Adwaita-dark"
 
-    # Start GUI
-    startxfce4
+    # Start GUI. exec replaces the login shell so that getty restarts and
+    # autologin brings X back after "Save & restart" ends the session.
+    exec startxfce4
 fi
