@@ -1,5 +1,7 @@
 work/
 out/
+node_modules/
+.iso-version
 .idea
 *.iml
 .vscode

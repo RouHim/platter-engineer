@@ -2,16 +2,27 @@ name: Build
 
 on:
   push:
-  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+    branches:
+      - main
   pull_request:
     types:
       - opened
+      - synchronize
+      - reopened
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
   schedule:
     - cron: "0 0 * * 0" # weekly at sunday night
 
+permissions:
+  contents: write # semantic-release pushes the release tag and creates the release
+  issues: write # @semantic-release/github comments on released issues
+  pull-requests: write # @semantic-release/github comments on released pull requests
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Publishing must never be cancelled halfway: the tag would exist without its
+  # release, and the next run would bump past it. Pull requests stay cancellable.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -22,12 +33,20 @@ jobs:
 
     steps:
 
+      # git has to exist before checkout: without it actions/checkout silently
+      # downloads a tarball instead, leaving no history, tags or push credentials.
+      - name: Install git
+        run: pacman -Syyu --noconfirm && pacman -S --noconfirm git
+
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 1
+          fetch-depth: 0 # semantic-release needs the full history and every tag
 
       - name: Install dependencies
-        run: pacman -Syyu --noconfirm && pacman -S --noconfirm base-devel archiso jq grub rust pkgconf gtk4
+        run: pacman -S --noconfirm base-devel archiso grub rust pkgconf gtk4 nodejs npm github-cli jq
+
+      - name: Install release tooling
+        run: npm ci
 
       - name: Test easy-language-config
         run: cargo test --release --locked --manifest-path easy-language-config/Cargo.toml
@@ -38,17 +57,57 @@ jobs:
       - name: Install easy-language-config into airootfs
         run: install -Dm755 easy-language-config/target/release/easy-language-config airootfs/usr/local/bin/easy-language-config
 
-      - name: Build iso file
-        run: mkarchiso -v .
-
-      - name: Rename file
-        if: github.ref == 'refs/heads/main'
-        run: mv out/*.iso out/platter-engineer.iso
-
-      - name: Upload iso
-        if: github.ref == 'refs/heads/main'
+      # A scheduled run has no commits of its own, so semantic-release would find
+      # nothing to release and the freshly built ISO would be discarded. The empty
+      # commit makes the weekly package refresh an actual patch release.
+      - name: Record weekly rebuild commit
+        if: github.event_name == 'schedule'
         run: |
-          bash .github/scripts/upload-asset-to-release.sh \
-            ${{ secrets.RELEASE_TOKEN }} \
-            "out/platter-engineer.iso" \
-            "platter-engineer.iso"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "fix(iso): weekly rebuild with current Arch packages"
+          git push origin HEAD:main
+
+      # The ISO build needs the version up front, but semantic-release only exposes
+      # it in `prepare`/`publish`, which are skipped in dry-run mode. The
+      # verifyRelease plugin runs in dry-run mode and writes .iso-version.
+      # Pull requests exit early (nothing to publish) and yield an empty version.
+      - name: Determine next release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -f .iso-version
+          npx semantic-release --dry-run
+
+          version="$(cat .iso-version 2>/dev/null || true)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$version" ]; then
+            echo "No release warranted, skipping build and publish."
+          else
+            echo "Releasing ${version}."
+          fi
+
+      # Pull requests build to prove the profile still compiles, without a version.
+      - name: Build iso file
+        if: github.event_name == 'pull_request' || steps.release.outputs.version != ''
+        env:
+          ISO_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          mkarchiso -v .
+          mv out/*.iso out/platter-engineer.iso
+
+      # Creates the release as a draft, uploads the ISO and only then publishes it,
+      # so the download link never points at a release without its asset.
+      - name: Publish release
+        if: steps.release.outputs.version != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
+
+      - name: Keep the newest 3 releases
+        if: steps.release.outputs.version != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/prune-releases.sh

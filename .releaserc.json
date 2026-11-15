@@ -1,0 +1,38 @@
+{
+  "branches": [
+    "main"
+  ],
+  "tagFormat": "${version}",
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    [
+      "./.github/plugins/next-version.mjs",
+      {
+        "outputFile": ".iso-version"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          {
+            "path": "out/platter-engineer.iso",
+            "name": "platter-engineer.iso",
+            "label": "Platter Engineer ISO"
+          }
+        ]
+      }
+    ]
+  ]
+}
